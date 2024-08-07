@@ -99,49 +99,78 @@ def create_synthetic_data(FIGURES_DIR='graph_figures'):
     return edge_index, labels, train_mask, test_mask, N, 2, None
     
 def calc_p_dirichlet(x, L):
-    energy=torch.sum(torch.diag(x.T@L@x))
+    energy=torch.sum(torch.diag(x.T@L@x)) +1e-3
     return torch.sqrt(energy)/x.shape[0]
 
-def create_infer_graph_from_x(x, th1, th2, x_size=0):
-    # print('create graph in forward')
-    # adj = torch.sigmoid(decode+self.bias)
-    # get device from x
-    device = x.device
-    decode = x.to(device)
-    decode = (decode@decode.T).detach()
-    # adj = decode
-    adj = torch.sigmoid(decode)
-    # adj = torch.sigmoid(decode-decode.mean())
 
-    adj_sim=adj.clone()
-    adj_sim[adj_sim>th1]=1.0
-    adj_sim[adj_sim<th2]=0.0
-    if x_size>0:
-        # make the non-diag elements to be 0
-        adj_sim[:x_size, :x_size]=0
-        adj_sim[:x_size, :x_size]=torch.eye(x_size).to(device)
-   
-        
+def sim_graph(adj, th):
+    # adj[adj>th]=1.0
+    # adj[adj<th]=0
+    if th==1:
+        adj=torch.expm1(adj)
+        D = torch.diag_embed(torch.sum(adj, dim=1))
+        deg_inv_sqrt = torch.pow(D.diag(), -0.5)
+        deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
+        deg_inv_sqrt = torch.diag_embed(deg_inv_sqrt)
+        A_norm = deg_inv_sqrt@(adj)@deg_inv_sqrt   # CHECK !!!! 072624 if normalize L, acc is 0.1 equals[L_sys-I] Cora use this one has better performance
+        # L_sys =  deg_inv_sqrt@(D-adj)@deg_inv_sqrt # this is the correct way of normalize L; iris use this one has better performance
+    elif th==2:
+        adj[adj<0.95]=0.0
+        adj[adj>0.95]=1.0
+        D = torch.diag_embed(torch.sum(adj, dim=1))
+        deg_inv_sqrt = torch.pow(D.diag(), -0.5)
+        deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
+        deg_inv_sqrt = torch.diag_embed(deg_inv_sqrt)
+        A_norm = deg_inv_sqrt@(adj)@deg_inv_sqrt   # CHECK !!!! 072624 if normalize L, acc is 0.1 equals[L_sys-I] Cora use this one has better performance
+        # L_sys =  deg_inv_sqrt@(D-adj)@deg_inv_sqrt # this is the correct way of normalize L; iris use this one has better performance
+    elif th==3:
+        adj=adj**2
+    elif th==4:
+        adj=adj
+    elif th==5:
+        adj=adj+torch.eye(adj.shape[0]).to(adj.device)*torch.e 
+
     
-    I=torch.eye(adj_sim.shape[0]).to(device)
-    # adj_sim=adj_sim-I this makes the learning stays 0.1429 and not change
-
-
-    D = torch.diag_embed(torch.sum(adj_sim, dim=1))
     
+    return A_norm
+
+def unsim_graph(adj, th):
+    adj[adj>th]=0.0
+    # adj[adj<th]=1.0
+    adj.diagonal().fill_(1)
+    D = torch.diag_embed(torch.sum(adj, dim=1))
     deg_inv_sqrt = torch.pow(D.diag(), -0.5)
     deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
     deg_inv_sqrt = torch.diag_embed(deg_inv_sqrt)
-    A_infered = deg_inv_sqrt@adj_sim@deg_inv_sqrt   # CHECK !!!! 072624 if normalize L, acc is 0.1 equals[L_sys-I] Cora use this one has better performance
-    L_sys =  deg_inv_sqrt@(D-adj_sim)@deg_inv_sqrt # this is the correct way of normalize L; iris use this one has better performance
+    L_sys =  deg_inv_sqrt@(D-adj)@deg_inv_sqrt # this is the correct way of normalize L; iris use this one has better performance
+    return L_sys
+    
+def create_infer_graph_from_x(x, th1, th2, x_size=0, plot_hist=False):
+    adj = (x@x.T)
+    # adj=torch.sigmoid(adj)
 
-
-    # D = torch.diag_embed(torch.sum(adj, dim=1))
-    # deg_inv_sqrt = torch.pow(D.diag(), -0.5)
-    # deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
-    # deg_inv_sqrt = torch.diag_embed(deg_inv_sqrt)
-    # adj = deg_inv_sqrt@adj@deg_inv_sqrt
-    # L_sys = torch.div(L, D.diag().reshape(-1, 1))
-    # L_sys = torch.div(torch.div(L, D.diag().reshape(1, -1)), D.diag().reshape(-1, 1))
-    return A_infered, L_sys
+    norms=torch.norm(x, p=2, dim=1).unsqueeze(1)
+    adj=adj/(norms@norms.T+1e-6)
+    if x_size>0:
+    # #     # make the non-diag elements to be 0
+        adj[:x_size, :x_size].triu().fill_(0)
+        adj[:x_size, :x_size].tril().fill_(0)
+    # adj.diagonal().fill_(1)
+    adj_sim=sim_graph(adj.clone(),th1)
+    adj_unsim=unsim_graph(adj.clone(),th2)
+    
+    
+    # # generate a random number from 1 to 100
+    # rnd=np.random.randint(1, 1000)
+    # if rnd>995 and plot_hist:
+    #     plt.hist(adj.flatten().detach().cpu().numpy(), bins=100)
+    #     # plt.hist(L_sys.flatten().detach().cpu().numpy(), bins=100)
+    #     #     # use log on y axis
+    #     plt.yscale('log')
+    #     plt.xlabel('Similarity score')
+    #     plt.title(f'sigmoid(X@X.T) histogram {plot_hist}')
+    #     plt.savefig('./sigmoid_X_X_T_hist.png')
+    #     plt.clf()
+        
+    return adj_sim, adj_unsim
     

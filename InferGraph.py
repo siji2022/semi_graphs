@@ -291,16 +291,16 @@ hidden_dim = 128
 drop = 0.5
 th1 = 0.99
 th2 = 1
-for DATA_SET in ['CiteSeer']:
+for DATA_SET in ['Cora']:
 # for DATA_SET in ['Cora','CiteSeer', 'Pubmed']:
     # for SPLIT in ['public','full', 'random']:
     for SPLIT in ['random']:
-        edge_index, labels, train_mask, test_mask, N, NUM_CLASSES, data = load_dataset(DATA_SET, SPLIT)
-        for mode in [0,1,2]:
+        
+        for mode in [2]:
             for drop in [0.2]:
             # for drop in [0, 0.2, 0.5, 0.7]:
                 if mode==2:
-                    th1_list=[0.8, 0.9]
+                    th1_list=[0.5,0.9]
                     # th1_list=[0.5,0.6,0.7, 0.8, 0.9, 0.95]
                 else:
                     th1_list=[0]
@@ -308,9 +308,10 @@ for DATA_SET in ['CiteSeer']:
                     train_accs = []
                     test_accs = []
                     p_norms = []
-                    RUN_TIMES = 1
+                    RUN_TIMES = 10
                     
                     for i in range(RUN_TIMES):
+                        edge_index, labels, train_mask, test_mask, N, NUM_CLASSES, data = load_dataset(DATA_SET, SPLIT)
                         model = GNN(feature_dim=data.x.shape[1],out_dim=NUM_CLASSES, hidden_dim=hidden_dim, create_graph=True,
                                     drop=drop, th1=th1, th2=th2, mode=mode, saved_graph=None).to(device)
                         train_acc, test_acc, p_norm = run_experiment(model, data)
