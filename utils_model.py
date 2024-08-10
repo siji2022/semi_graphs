@@ -217,10 +217,11 @@ def test_iris_emb(model, test_data_loader, crit):
     y=torch.cat(y)
     pred_y=torch.cat(pred_y)
     acc=(pred_y.argmax(dim=-1) == y).sum().float()/len(y)
+    f1= f1_score(y, pred_y.argmax(dim=-1),7)
     # save pred into pt file
     # torch.save(pred, f'./results/{DATA_SET}_pred_Infer.pt')
     
-    return loss, acc.cpu(), p_norm.cpu()
+    return loss, acc.cpu(), p_norm.cpu(), f1
     
 class GNN(nn.Module):
     def __init__(self, feature_dim, hidden_dim, out_dim, create_graph, drop, th1, th2, mode=0, saved_graph=None):
@@ -228,6 +229,7 @@ class GNN(nn.Module):
         super(GNN, self).__init__()
         self.nn1 = nn.Linear(feature_dim, hidden_dim)
         self.nn2 = nn.Linear(hidden_dim, hidden_dim)
+        self.nn3 = nn.Linear(hidden_dim, hidden_dim)
         self.gcn1 = geom_nn.GCNConv(feature_dim, hidden_dim)
         self.gcn2 = geom_nn.GCNConv(hidden_dim, hidden_dim)
         self.clf = nn.Linear(hidden_dim, out_dim)
@@ -241,54 +243,52 @@ class GNN(nn.Module):
         self.create_graph = create_graph
         self.saved_graph=saved_graph
         self.mode=mode
+        self.bn1 = nn.BatchNorm1d(hidden_dim)
+        self.bn2 = nn.BatchNorm1d(hidden_dim)
+        self.bn3 = nn.BatchNorm1d(hidden_dim)
 
     def forward(self, data, x=None, Debug=False):
         data_x, edge, attr = data.x, data.edge_index, data.edge_attr
  
 
         if self.l_sys is None and self.create_graph and self.saved_graph is None:
-            self.l_sys, self.l_for_energy = create_infer_graph_from_x(data_x, self.th1, self.th2)
-            self.adj = self.l_sys
-            # change adj matrix to adjancy list
-            # edge = torch_geometric.utils.dense_to_sparse(adj)[0]
-            # self.edge = edge  # used for gcn
+            self.a_norm, self.l_sys = create_infer_graph_from_x(data_x, self.th1, self.th2)
+            self.a_norm.requires_grad=False
+            self.l_sys.requires_grad=False
+    
+
         elif self.l_sys is None:
             self.l_sys = self.saved_graph
         
-
-        # if Debug and self.create_graph:
-        #     #     # print(f'D max: {D.max()}, D min: {D.min()}')
-        #     # print(f'adj max: {adj.max()}, adj min: {adj. min()}')
-        #     # plot adj distribution
-        #     path = osp.join(osp.dirname(osp.realpath(__file__)), '.',
-        #                     FIGURES_DIR, f'adj_hist.png')
-        #     plt.clf()
-        #     plt.hist(self.adj.flatten().detach().cpu().numpy(), bins=100)
-        #     # use log on y axis
-        #     plt.yscale('log')
-        #     plt.savefig(path)
-        #     # print(f'edge max: {edge.max()}, edge min: {edge.min()}')
-        #     # print(L_sys[0][0], L_sys[1][1])
-        #     print(
-        #         f'emb max: {emb.max():3f}, decode min: {decode.min():3f}, bias: {self.bias.min():3f}, L_sys min: {L_sys.min():3f}')
         if self.mode==0:
             out1=F.relu(F.dropout(self.gcn1(data_x, edge),self.drop, training=self.training))
+            # out1=self.bn1(out1)
             out2=F.relu(F.dropout(self.gcn2(out1, edge),self.drop, training=self.training))
+            # out2=self.bn2(out2)
         
         if self.mode==1:
             out1 = F.relu(F.dropout((self.nn1(data_x)), self.drop,
                                     training=self.training))
+            # out1=self.bn1(out1)
             out2 = F.relu(F.dropout((self.nn2(out1)), self.drop,
                                     training=self.training))
+            # out2=self.bn2(out2)
         if self.mode==2:
-            out1 = F.relu(F.dropout(self.l_sys@(self.nn1(data_x)), self.drop,
+            I=torch.eye(data_x.shape[0], device=device)
+            out1 = F.relu(F.dropout((self.a_norm)@(self.nn1(data_x)), self.drop,
                                training=self.training))
-            out2 = F.relu(F.dropout((self.l_sys@self.nn2(out1)), self.drop,
+            # out1=self.bn1(out1)
+            out2 = F.relu(F.dropout(self.l_sys@self.nn2(out1), self.drop,
                                training=self.training))
+            # out2=self.bn2(out2)
+            
+            # out3 = F.relu(F.dropout((self.a_norm@self.nn3(out2)), self.drop,
+            #                    training=self.training))
+            # out3=self.bn3(out3)
         
        
         if self.create_graph or self.saved_graph is not None :
-            p_norm = calc_p_dirichlet(out2, self.l_for_energy)
+            p_norm = calc_p_dirichlet(data_x, self.l_sys)
         else:
             p_norm = torch.tensor(0)
         # out = F.dropout(F.relu(self.nn(data_x)),0.2, training=self.training)
@@ -297,7 +297,7 @@ class GNN(nn.Module):
         #                        training=self.training) #acc 0.7580
         # concat the two outputs
         # out=torch.concat((out1, out2), dim=1)
-        out = self.clf(out2)
+        out = self.clf(out2+out1)
 
         return None, out, p_norm
 
@@ -395,9 +395,9 @@ class GNN3(GNN):
             self.a_norm, self.l_sys = create_infer_graph_from_x(data, self.th1, self.th2, used_data_size, not self.training)
 
                 
-            out1 = F.relu(F.dropout(self.a_norm@(self.nn1(data)), self.drop,
+            out1 = F.relu(F.dropout(self.l_sys@self.a_norm@(self.nn1(data)), self.drop,
                                training=self.training))
-            out2 = F.relu(F.dropout((self.a_norm@self.nn2(out1)), self.drop,
+            out2 = F.relu(F.dropout((self.nn2(out1)), self.drop,
                                training=self.training))
             
             p_norm = calc_p_dirichlet(out2, self.l_sys)
@@ -451,12 +451,13 @@ class GNN4(GNN3):
         self.num_centroids= num_centroids # number of centers for each k-means
         # self.centroids=[ Embedding(self.num_centroids, self.kernal_features, sparse=False) for _ in range(self.m)]
         # initialize the centroids weight
-        # self.centroids=nn.Parameter(torch.Tensor(self.m, self.num_centroids, self.kernal_features))
+        self.centroids=nn.Parameter(torch.Tensor(self.m, self.num_centroids, feature_dim))
         self.nn1_v4=[]
         self.nn2_v4=[]
         self.gcn1_v4=[]
         self.gcn2_v4=[]
-        self.bn = nn.BatchNorm1d(hidden_dim)
+        self.bn1 = nn.BatchNorm1d(hidden_dim)
+        self.bn2 = nn.BatchNorm1d(hidden_dim)
         # self.centroids_nn=[]
         for _ in range(self.m):
             # self.centroids_nn.append(nn.Linear(self.kernal_features, 1024).to(device))
@@ -554,9 +555,11 @@ class GNN4(GNN3):
                 # mask=self.kernal_idxs[i]
                 out1 = F.relu(F.dropout((self.nn1_v4[i](data[:])), self.drop,
                                         training=self.training))
-                out1=self.bn(out1)
+                # out1=self.bn1(out1)
                 out2 = F.relu(F.dropout((self.nn2_v4[i](out1)), self.drop,
                                         training=self.training))
+                # batch norm out2
+                # out2=self.bn2(out2)
                 outs.append(out2)
         
             outs=torch.concat(outs,dim=1)
@@ -594,11 +597,12 @@ class GNN4(GNN3):
                 
                 out1 = F.relu(F.dropout((self.a_norm@self.nn1_v4[i](temp)), self.drop,
                                 training=self.training))
-                out1=self.bn(out1)
+                # out1=self.bn1(out1) # bn not improve performance when adam optimizer is used.
                 # out1 = F.relu(F.dropout((self.l_sys@self.nn1_v4[i+1](out1)), self.drop,
                 #                 training=self.training))
                 out2 = F.relu(F.dropout((self.l_sys@self.nn2_v4[i](out1)), self.drop,
                                 training=self.training))
+                # out2=self.bn2(out2)
                 # out2 = F.relu(F.dropout((self.a_norm@self.nn2_v4[i+1](out2)), self.drop,
                 #                 training=self.training))
     
@@ -651,3 +655,145 @@ class GNN4(GNN3):
         plt.savefig(path)
         plt.clf()
         return path
+    
+    
+        
+# create GNN4 model extends GNN; create emb layer use encoder/deconder style
+class GNN5(GNN3):
+    def __init__(self, feature_dim, hidden_dim, out_dim, create_graph, drop, th1, th2, mode=0, 
+                 saved_graph=None, num_centroids=3):
+        super(GNN3, self).__init__(feature_dim, hidden_dim, out_dim, create_graph, drop, th1, th2, mode, saved_graph)
+        
+        self.num_centroids= num_centroids # number of centers for each k-means
+        self.nn1_v4=[]
+        self.nn2_v4=[]
+        self.gcn1_v4=[]
+        self.gcn2_v4=[]
+        self.encoder=[]
+        self.decoder=[]
+        self.bn = nn.BatchNorm1d(hidden_dim)
+     
+        self.encoder.append(nn.Linear(feature_dim, hidden_dim).to(device))
+        self.encoder.append(nn.Linear(hidden_dim, hidden_dim).to(device))
+        self.decoder.append(nn.Linear(hidden_dim, hidden_dim).to(device))
+        self.decoder.append(nn.Linear(hidden_dim, feature_dim).to(device))
+        
+        
+        self.nn1_v4.append(nn.Linear(feature_dim, hidden_dim).to(device))
+        # self.nn1_v4.append(nn.Linear(hidden_dim, hidden_dim).to(device))
+        self.nn2_v4.append(nn.Linear(hidden_dim, hidden_dim).to(device))
+        # self.nn2_v4.append(nn.Linear(hidden_dim, hidden_dim).to(device))
+        self.nn1_v4=nn.ModuleList(self.nn1_v4) # Need this otherwise the parameters are not reconized by the optimizer
+        self.nn2_v4=nn.ModuleList(self.nn2_v4)
+       
+        self.encoder=nn.ModuleList(self.encoder)
+        self.decoder=nn.ModuleList(self.decoder)
+        self.clf = nn.Linear(hidden_dim, out_dim)
+        self.clf_encoder=nn.Linear(feature_dim, out_dim)
+        
+        # self.gcn1_v4.append(geom_nn.GCNConv(feature_dim, hidden_dim,add_self_loops=True, improved=True).to(device))
+        # self.gcn2_v4.append(geom_nn.GCNConv(hidden_dim, hidden_dim, add_self_loops=True, improved=True).to(device))
+        # self.gcn1_v4.append(geom_nn.SAGEConv(feature_dim, hidden_dim).to(device))
+        # self.gcn2_v4.append(geom_nn.SAGEConv(hidden_dim, hidden_dim).to(device))
+        # self.gcn1_v4.append(geom_nn.GraphConv(feature_dim, hidden_dim).to(device)) # not working
+        # self.gcn2_v4.append(geom_nn.GraphConv(hidden_dim, hidden_dim).to(device)) # not working
+        self.gcn1_v4.append(geom_nn.ChebConv(feature_dim, hidden_dim, K=3).to(device))
+        self.gcn2_v4.append(geom_nn.ChebConv(hidden_dim, hidden_dim, K=3).to(device))
+        # self.gcn1_v4.append(geom_nn.GATConv(feature_dim, hidden_dim).to(device)) #not working
+        # self.gcn2_v4.append(geom_nn.GATConv(hidden_dim, hidden_dim).to(device))  #not working
+        self.gcn1_v4=nn.ModuleList(self.gcn1_v4)
+        self.gcn2_v4=nn.ModuleList(self.gcn2_v4)
+        
+        
+        
+    def fit(self, train_loader, optimizer, crit_mse,crit_c, epochs=100):
+        self.train()
+        total_loss=0
+        loss_history=[]
+        all_x=[]
+        for data in train_loader:
+            x, y =data
+            all_x.append(x)
+        all_x=torch.concat(all_x)
+        all_x=all_x[:self.num_centroids]
+        self.centroids=nn.Parameter(all_x,requires_grad=False)
+        for _ in range(epochs):
+            loss=None
+            total_loss=0
+               
+            optimizer.zero_grad()
+            for data in train_loader:
+                x, y =data
+                x=F.dropout(F.relu(self.encoder[0](x)),self.drop, training=self.training)
+                x=F.dropout(F.relu(self.encoder[1](x)),self.drop, training=self.training)
+                
+                out=F.dropout(F.relu(self.decoder[0](x)),self.drop, training=self.training)
+                out=self.decoder[1](out)
+                
+                pred_c=self.clf_encoder(out)
+                loss=crit_mse(out, data[0]) # reconstruction x vs x_hat
+                # loss_c=crit_c(pred_c, y)    # reconstruction prediction on classification y vs y_hat
+                # loss=loss+loss_c # remove, it only has 0.5 acc
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item()
+            loss_history.append(total_loss)
+        # don't modify encoder/decoder's weight
+        # self.encoder[0].requires_grad=False
+        # self.encoder[1].requires_grad=False
+        # self.decoder[0].requires_grad=False
+        # self.decoder[1].requires_grad=False
+        return loss_history
+
+            
+    def forward(self, data):
+        # ref_data is used to create the graph
+        used_data_size=data.shape[0]
+        
+        if self.mode==0:
+            outs=[]
+            out1 = F.relu(F.dropout((self.nn1_v4[0](data[:])), self.drop,
+                                    training=self.training))
+            out1=self.bn(out1)
+            out2 = F.relu(F.dropout((self.nn2_v4[0](out1)), self.drop,
+                                    training=self.training))
+            outs.append(out2)
+        
+            outs=torch.concat(outs,dim=1)
+            out = self.clf(outs)
+            p_norm = torch.tensor(0)
+            
+        if self.mode==1:
+            # concat data and ref_data
+            centers=self.centroids.detach()
+            temp=torch.concat((data, centers), dim=0)
+
+            encoded=F.relu(self.encoder[0](temp))
+            encoded=F.relu(self.encoder[1](encoded))
+            reconstructed=F.relu(self.decoder[0](encoded))
+            reconstructed=self.decoder[1](reconstructed)
+            
+            # temp=torch.concat((data, reconstructed), dim=0)
+            self.l_sys = create_infer_graph_from_x_v5(reconstructed, self.th1, self.th2, used_data_size, not self.training)
+            
+            # out1 = F.relu(F.dropout((self.l_sys@self.nn1_v4[0](temp)), self.drop,
+            #                 training=self.training))
+            # convert dense to edge_index
+            edge_index, weight=torch_geometric.utils.dense_to_sparse(self.l_sys)
+            out1 = F.relu(F.dropout((self.gcn1_v4[0](temp,edge_index, weight)), self.drop,
+                            training=self.training))
+            
+            # out1=self.bn(out1)
+      
+            out2 = F.relu(F.dropout((self.gcn2_v4[0](out1,edge_index, weight)), self.drop,
+                            training=self.training))
+
+
+            # p_norm = calc_p_dirichlet(reconstructed, self.l_sys)
+            p_norm = torch.tensor(0)
+            out2=out2[:used_data_size]
+            out = self.clf(out2)
+
+            
+        return out, p_norm
+    

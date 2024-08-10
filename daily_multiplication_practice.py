@@ -9,8 +9,8 @@ def daily_practice(stats):
     num2 = random.randint(1, 12)
     
 
-    # mode=random.randint(1, 3)
-    mode=0
+    mode=random.randint(0, 2)
+    mode=1
     if mode ==0:
         # multiplication
         product=num1*num2
