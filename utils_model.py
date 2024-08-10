@@ -60,8 +60,8 @@ def load_dataset_1(train_size=0.2, dataset='Cora'):
     val_dataset = TensorDataset(x_val, y_val)
     test_dataset = TensorDataset(x_test, y_test)
     train_loader = DataLoader(train_dataset, batch_size=1024, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=256, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=256, shuffle=False)
+    val_loader = DataLoader(val_dataset, batch_size=1024, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=1024, shuffle=False)
     print('train size:', x_train.shape)
     print('test_size:', x_test.shape)
     return train_loader, val_loader, test_loader, x.to(device) 
@@ -535,14 +535,14 @@ class GNN4(GNN3):
         all_x=torch.concat(all_x)
         all_x=all_x # only use first 140 data points to fit the centroids
         all_x=all_x.unsqueeze(0)
-        all_x=all_x[:self.num_centroids]
+        all_x=all_x[:,:self.num_centroids]
         params=[]
         for i in range(self.m):
             params.append(all_x)
         params=torch.concat(params)
         # use all_x as self.centroids
         self.centroids=nn.Parameter(params,requires_grad=False)
-        
+        # print('centroids shape', self.centroids.shape)
         return 0
             
     def forward(self, data):

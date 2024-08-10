@@ -39,7 +39,7 @@ from sklearn.model_selection import train_test_split
 
 device = torch.device(
     "cuda:1") if torch.cuda.is_available() else torch.device("cpu")
-Training_EPS = 100
+Training_EPS = 200
 DEBUG = False
 
 
@@ -115,21 +115,20 @@ def run_experiment(model, train_loader, val_loader, test_loader, x, ):
 
 hidden_dim = 128
 th2 = 0.2
-th1=0.1
-DATA_SET='Cora'
-# DATA_SET='Citeseer'
+th1= 0.1
+# DATA_SET='Cora'
+DATA_SET='Citeseer'
+# DATA_SET='Pubmed'
 train_size=140
 drop=0.2
 m=1
-for hidden_dim in [128,]:
+for train_size in [0.3]:
 # for train_size in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]:
 # for train_size in [140,210,280,350,630,840,1050,1260 ]:
-# for train_size in [840 ]:
-    train_loader, val_loader, test_loader, x  = load_dataset_1(train_size, DATA_SET)
-    num_centroids=int(train_size*2708)
-    num_centroids=140
-    for mode in [1]:
-        for drop in [ 0.2]:
+# for train_size in [840 ]:    
+    for mode in [0,1]:
+        # for drop in [ 0.2]:
+        for DATA_SET in [ 'Citeseer','Cora']:
             if mode==1:
                 # th1_list=[0.5]
                 th1_list=[1]
@@ -145,8 +144,18 @@ for hidden_dim in [128,]:
                     RUN_TIMES = 10
                     
                     for i in range(RUN_TIMES):
+                        train_loader, val_loader, test_loader, x  = load_dataset_1(train_size, DATA_SET)
+                        # num_centroids=int(train_size*x.shape[0])
+                        # num_centroids=np.min([1000,num_centroids])
+                        num_centroids=1000
+                        if DATA_SET == 'Cora':
+                            out_dim = 7
+                        elif DATA_SET == 'Citeseer':
+                            out_dim = 6
+                        elif DATA_SET == 'Pubmed':
+                            out_dim = 3
                         
-                        model = GNN4(feature_dim=x.shape[1],out_dim=7, hidden_dim=hidden_dim, create_graph=True,
+                        model = GNN4(feature_dim=x.shape[1],out_dim=out_dim, hidden_dim=hidden_dim, create_graph=True,
                                     drop=drop, th1=th1, th2=th2, mode=mode, saved_graph=None,num_centroids=num_centroids,
                                     m=m).to(device)
                         
@@ -165,17 +174,17 @@ for hidden_dim in [128,]:
                         # save model
                         path=osp.join(osp.dirname(osp.realpath(__file__)),
                                     '.', 'models',f'v4_{DATA_SET}_mode_{mode}_{train_size}_hs_{hidden_dim}_drop_{drop}_th1_{th1}_th2_{th2}_iter_{i}.pt')
-                        save_model(model, path)
+                        # save_model(model, path)
                     print(f'completed {RUN_TIMES},train_size={train_size}, mode={mode}, hs={hidden_dim}, drop={drop}, th1={th1}, th2={th2}, m={model.m}, num_centroids={model.num_centroids}, train acc: {np.mean(train_accs):.4f},{np.std(train_accs):.4f}, test acc: {np.mean(test_accs):.4f}, {np.std(test_accs):.4f}, p_norm: {np.mean(p_norms):.4f}, {np.std(p_norms):.4f}')
                     # # # save into csv file
                     results = pd.DataFrame(
                         {'train_acc': train_accs, 'test_acc': test_accs, 'p_norm': p_norms})
-                    # if mode==0:
-                    #     results.to_csv(
-                    #         f'./results/{DATA_SET}_{train_size}_hs_{hidden_dim}_drop_{drop}_MLP.csv')
-                    # if mode==1:
-                    #     results.to_csv(
-                    #     f'./results/{DATA_SET}_{train_size}_hs_{hidden_dim}_drop_{drop}_th1_{th1}_th2_{th2}_centroids_{num_centroids}.csv')
+                    if mode==0:
+                        results.to_csv(
+                            f'./results/{DATA_SET}_{train_size}_hs_{hidden_dim}_drop_{drop}_MLP.csv')
+                    if mode==1:
+                        results.to_csv(
+                        f'./results/{DATA_SET}_{train_size}_hs_{hidden_dim}_drop_{drop}_th1_{th1}_th2_{th2}_centroids_{num_centroids}.csv')
                     
                    
         print('-----------------')
